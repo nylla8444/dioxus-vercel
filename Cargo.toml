@@ -1,0 +1,20 @@
+[package]
+name = "dioxus-vercel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Build a Dioxus web app and deploy it to Vercel as a prebuilt static site"
+repository = "https://github.com/nylla8444/dioxus-vercel"
+readme = "README.md"
+keywords = ["dioxus", "vercel", "wasm", "deploy", "cli"]
+categories = ["command-line-utilities", "wasm", "web-programming"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+which = "8"
+
+[dev-dependencies]
+regex = "1"
