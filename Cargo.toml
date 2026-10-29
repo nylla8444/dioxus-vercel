@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Build a Dioxus web app and deploy it to Vercel as a prebuilt static site"
+license = "MIT"
 repository = "https://github.com/nylla8444/dioxus-vercel"
 readme = "README.md"
 keywords = ["dioxus", "vercel", "wasm", "deploy", "cli"]

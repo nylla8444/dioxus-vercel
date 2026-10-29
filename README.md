@@ -71,3 +71,7 @@ On a real deploy, Vercel also serves the `.wasm` file with the right content typ
 - **Don't connect the Git repo to Vercel** without changing the project's Framework Preset to "Other". Vercel detects `Cargo.toml` and `src/main.rs` as its "Rust" preset and would try to build your app as a server function.
 - **Unknown paths return status 200**, because they get `index.html` (see routes above).
 - **Building on Windows is fine.** The WebAssembly output is the same on every OS, so no cross-compiling is needed.
+
+## License
+
+[MIT](LICENSE)
