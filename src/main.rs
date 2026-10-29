@@ -1,6 +1,8 @@
+mod config;
 mod output;
 mod project;
 mod tools;
+mod vercel;
 
 use std::path::PathBuf;
 
@@ -8,6 +10,7 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
 use crate::project::Project;
+use crate::vercel::Vercel;
 
 /// Build a Dioxus web app and deploy it to Vercel as a prebuilt static site.
 #[derive(Parser)]
@@ -28,9 +31,13 @@ enum Command {
         /// Deploy to production instead of a preview
         #[arg(long)]
         prod: bool,
-        /// Vercel project to deploy to; it is created if it doesn't exist
+        /// Vercel project to deploy to; it is created if it doesn't exist.
+        /// Defaults to `project` in [package.metadata.dioxus-vercel].
         #[arg(long)]
         project: Option<String>,
+        /// Remember --project in Cargo.toml so later deploys don't need it
+        #[arg(long, requires = "project")]
+        save: bool,
     },
 }
 
@@ -60,10 +67,26 @@ fn main() -> Result<()> {
             build: args,
             prod,
             project,
+            save,
         } => {
+            // Fail before the slow bundle step if the Vercel CLI is missing.
+            let vercel = Vercel::find()?;
             let built = build(&args)?;
-            tools::vercel_deploy(&built.root, prod, project.as_deref())?;
-            if !prod {
+            let target = project.as_deref().or(built.vercel_project.as_deref());
+            let created = vercel.deploy(&built.root, prod, target)?;
+
+            if let Some(project) = &project {
+                if save {
+                    config::save_project(&built.manifest_path, project)?;
+                    println!(
+                        "Saved project `{project}` to {}",
+                        built.manifest_path.display()
+                    );
+                } else if built.vercel_project.as_deref() != Some(project.as_str()) {
+                    println!("Tip: add --save to remember `{project}` in Cargo.toml.");
+                }
+            }
+            if !prod && !created {
                 println!(
                     "Note: preview deployments need a Vercel login to view unless you turn off Deployment Protection."
                 );

@@ -19,12 +19,19 @@ struct Package {
     name: String,
     version: String,
     manifest_path: PathBuf,
+    /// The package's `[package.metadata]` table, or null when it has none.
+    #[serde(default)]
+    metadata: serde_json::Value,
 }
 
 pub struct Project {
     /// Directory holding the package's Cargo.toml. `.vercel/` is written here.
     pub root: PathBuf,
+    /// The package's Cargo.toml, where `deploy --save` writes settings.
+    pub manifest_path: PathBuf,
     pub name: String,
+    /// Vercel project from `[package.metadata.dioxus-vercel]`, if set.
+    pub vercel_project: Option<String>,
     /// Cargo's target directory, which is shared by the whole workspace.
     pub target_dir: PathBuf,
     /// Resolved version of the `dioxus` crate.
@@ -66,7 +73,9 @@ impl Project {
                 .parent()
                 .context("manifest path has no parent")?
                 .to_path_buf(),
+            manifest_path: package.manifest_path.clone(),
             name: package.name.clone(),
+            vercel_project: configured_project(&package.metadata),
             target_dir: metadata.target_directory.clone(),
             dioxus_version,
         })
@@ -119,5 +128,36 @@ fn pick_package<'a>(
                 names.join(", ")
             )
         }
+    }
+}
+
+/// Reads `project` from `[package.metadata.dioxus-vercel]`.
+fn configured_project(metadata: &serde_json::Value) -> Option<String> {
+    metadata
+        .get("dioxus-vercel")?
+        .get("project")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::configured_project;
+    use serde_json::json;
+
+    #[test]
+    fn reads_the_project_from_package_metadata() {
+        let metadata = json!({ "dioxus-vercel": { "project": "my-site" } });
+        assert_eq!(configured_project(&metadata).as_deref(), Some("my-site"));
+    }
+
+    #[test]
+    fn ignores_missing_or_malformed_settings() {
+        assert_eq!(configured_project(&serde_json::Value::Null), None);
+        assert_eq!(configured_project(&json!({ "other-tool": {} })), None);
+        assert_eq!(
+            configured_project(&json!({ "dioxus-vercel": { "project": 3 } })),
+            None
+        );
     }
 }

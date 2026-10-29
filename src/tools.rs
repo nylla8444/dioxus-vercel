@@ -36,22 +36,7 @@ pub fn dx_bundle(dx: &Path, root: &Path, package: Option<&str>) -> Result<()> {
     run(dx, &args, root)
 }
 
-pub fn vercel_deploy(root: &Path, prod: bool, project: Option<&str>) -> Result<()> {
-    let vercel = find(
-        "vercel",
-        "Install it with `npm i -g vercel`, then run `vercel login`.",
-    )?;
-    let mut args = vec!["deploy", "--prebuilt"];
-    if prod {
-        args.push("--prod");
-    }
-    if let Some(project) = project {
-        args.extend(["--yes", "--project", project, "--create-if-missing"]);
-    }
-    run(&vercel, &args, root)
-}
-
-fn run(program: &Path, args: &[&str], dir: &Path) -> Result<()> {
+pub fn run(program: &Path, args: &[&str], dir: &Path) -> Result<()> {
     let name = program.file_stem().unwrap_or_default().to_string_lossy();
     println!("> {name} {}", args.join(" "));
     let status = Command::new(program)

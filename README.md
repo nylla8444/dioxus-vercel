@@ -45,9 +45,17 @@ cargo install --git https://github.com/nylla8444/dioxus-vercel --locked
 From your Dioxus project folder:
 
 ```sh
-dioxus-vercel deploy --project my-site          # preview deployment
-dioxus-vercel deploy --project my-site --prod   # production deployment
+dioxus-vercel deploy --project my-site --save   # first deploy; remembers the project
+dioxus-vercel deploy                            # preview deployment
+dioxus-vercel deploy --prod                     # production deployment
 dioxus-vercel build                             # only write .vercel/output
+```
+
+`--save` adds this to your `Cargo.toml`, and you can also write it by hand:
+
+```toml
+[package.metadata.dioxus-vercel]
+project = "my-site"
 ```
 
 | Option | What it does |
@@ -58,6 +66,11 @@ dioxus-vercel build                             # only write .vercel/output
 | `--no-fallback` | Return 404 for unknown paths instead of serving `index.html` |
 | `--prod` | Deploy to production instead of a preview (`deploy` only) |
 | `--project <name>` | Vercel project to deploy to; created if it doesn't exist (`deploy` only) |
+| `--save` | Remember `--project` in `Cargo.toml` (`deploy` only) |
+
+The project is picked from `--project`, then `Cargo.toml`, then a folder linked with `vercel link`. If none of those are set, Vercel asks.
+
+When dioxus-vercel creates a project, it sets the project's Framework Preset to "Other". Otherwise Vercel would pick its "Rust" preset from `Cargo.toml` and `src/main.rs`, and a build from a connected Git repo would try to run your app as a server function. For existing projects with a Rust preset, it prints a warning with the command that fixes it.
 
 ## What it writes
 
@@ -73,8 +86,7 @@ On a real deploy, Vercel also serves the `.wasm` file with the right content typ
 
 - **A project's first deploy goes to production.** That's how Vercel works. Later deploys are previews unless you pass `--prod`.
 - **Previews need a Vercel login to view**, because Deployment Protection is on by default.
-- **`--project` isn't remembered.** Pass it every time, or run `vercel link` once in your project folder. dioxus-vercel only replaces `.vercel/output`, so the link is kept.
-- **Don't connect the Git repo to Vercel** without changing the project's Framework Preset to "Other". Vercel detects `Cargo.toml` and `src/main.rs` as its "Rust" preset and would try to build your app as a server function.
+- **Connecting the Git repo to Vercel won't deploy your app.** Vercel can't build Dioxus apps, so deploy with dioxus-vercel instead.
 - **Unknown paths return status 200**, because they get `index.html` (see routes above).
 - **Building on Windows is fine.** The WebAssembly output is the same on every OS, so no cross-compiling is needed.
 
