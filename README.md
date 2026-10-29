@@ -31,7 +31,13 @@ Not supported yet:
 ## Install
 
 ```sh
-cargo install --git https://github.com/nylla8444/dioxus-vercel
+cargo install dioxus-vercel --locked
+```
+
+Or install the latest code from GitHub:
+
+```sh
+cargo install --git https://github.com/nylla8444/dioxus-vercel --locked
 ```
 
 ## Usage
