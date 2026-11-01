@@ -80,7 +80,7 @@ What happens on Vercel:
 - DioxusLabs' Linux builds of dx need glibc 2.35 or newer, and Vercel's machines have 2.34. So dioxus-vercel downloads a dx built on Amazon Linux 2023 by this repo's [build-dx workflow](.github/workflows/build-dx.yml), and checks its checksum.
 - The first build takes about 3 minutes. dioxus-vercel keeps Rust's build output in `node_modules/.cache`, which Vercel saves and restores for Git-connected projects, so later builds take under a minute.
 
-This repo builds that dx automatically for every Dioxus version from 0.7.0 on, plus pre-releases newer than the latest stable version, usually within a day of a release ([the dx releases](https://github.com/nylla8444/dioxus-vercel/releases)). If your version has no build yet, the build compiles dx itself, which took over 15 minutes in our tests.
+This repo builds that dx automatically for every Dioxus version from 0.7.0 on, plus pre-releases newer than the latest stable version, usually within a day of a release ([the dx releases](https://github.com/nylla8444/dioxus-vercel/releases)). If your version has no build yet, the build compiles dx itself, which takes 12 to 15 minutes on Vercel.
 
 | `init` option | What it does |
 |---|---|
@@ -187,9 +187,10 @@ These times were measured in November 2026 on two small two-page apps: this repo
 
 | Approach | First build | Later builds |
 |---|---|---|
-| Without dioxus-vercel, using DioxusLabs' prebuilt `dx` | ❌ Fails: `dx` needs glibc 2.35 or newer, and Vercel's machines have 2.34 | ❌ Fails |
-| Without dioxus-vercel, compiling `dx` during the build | ❌ Still compiling `dx` after 17 minutes, when we stopped it | — |
-| **With dioxus-vercel (`init`)** | **2 min 56 s** | **57 s to 1 min**, because Vercel restores the cache |
+| No setup (Vercel's "Rust" preset) | ⚠️ The build passes in 1.5 minutes, but Vercel compiles the browser app as a server function, which crashes on startup. Every page returns a 500 error | Same |
+| A build script using DioxusLabs' prebuilt `dx` | ❌ Fails: `dx` needs glibc 2.35 or newer, and Vercel's machines have 2.34 | ❌ Fails |
+| A hand-written build script that compiles `dx` | ✅ Works, but takes **13 to 17 minutes**, 12 to 15 of them compiling `dx` | Pull-request and branch builds compiled `dx` again (13 minutes), because Vercel gives them the production branch's cache. Production builds that keep `dx` in the cache folder may be faster; we didn't measure that |
+| **dioxus-vercel (`init`)** | **2 min 56 s** | **57 s to 1 min**, pull-request previews included |
 
 In a later build, about 22 seconds go to installing dioxus-vercel, 13 to setting up Rust and 20 to compiling your own code. `dx` and your dependencies come from the cache.
 
@@ -197,7 +198,7 @@ In a later build, about 22 seconds go to installing dioxus-vercel, 13 to setting
 
 | How | Time |
 |---|---|
-| Compile it on Vercel's build machine (2 CPUs) | Over 17 minutes (stopped) |
+| Compile it on Vercel's build machine (2 CPUs) | 12 to 15 minutes |
 | Compile it on GitHub Actions | 6 to 13 minutes, across 15 Dioxus versions |
 | Compile it on a Windows laptop | 8 minutes |
 | **Download dioxus-vercel's build for Vercel** | **1 second** |
@@ -215,7 +216,7 @@ For comparison, another Rust and WebAssembly project [reported](https://github.c
 
 - **A project's first deploy goes to production.** That's how Vercel works. Later deploys are previews unless you pass `--prod`.
 - **Previews need a Vercel login to view**, because Deployment Protection is on by default.
-- **Connecting a Git repo to Vercel only works with `init`'s `vercel.json`.** Without it, Vercel can't build a Dioxus app.
+- **A connected Git repo needs a build setup.** Without one, Vercel's "Rust" preset builds the app as a server function that crashes on every request, while the build itself shows as successful. Use `init`, or your own build script.
 - **Unknown paths return status 200**, because they get `index.html` (see routes above).
 - **Building on Windows is fine.** The WebAssembly output is the same on every OS, so no cross-compiling is needed.
 

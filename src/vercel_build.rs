@@ -105,7 +105,7 @@ fn prepare_dx(version: &str, dir: &Path) -> Result<PathBuf> {
     if !found {
         eprintln!(
             "warning: there's no dx {version} built for Vercel yet, so it will be compiled, \
-             which takes about 20 minutes on Vercel. Ask for a build at \
+             which takes 12 to 15 minutes on Vercel. Ask for a build at \
              https://github.com/nylla8444/dioxus-vercel/issues"
         );
         let cargo = tools::find("cargo", "Vercel's build machines normally have it.")?;
