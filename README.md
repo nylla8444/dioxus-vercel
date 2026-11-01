@@ -4,11 +4,43 @@ Deploy a [Dioxus](https://dioxuslabs.com) web app to [Vercel](https://vercel.com
 
 | Way | Setup | On every push |
 |---|---|---|
-| [**Let Vercel build it**](#let-vercel-build-it) (`init`) | Add one `vercel.json`, import the repo on Vercel | Vercel builds and deploys the app (about 2 minutes); pull requests get previews |
+| [**Let Vercel build it**](#let-vercel-build-it) (`init`) | Add one `vercel.json`, import the repo on Vercel | Vercel builds and deploys the app (about 1 minute after the first build); pull requests get previews |
 | [**GitHub Actions**](#deploy-from-github-actions) (`init-ci`) | Add a workflow and a Vercel token secret | GitHub builds and deploys it (about 1 minute once cached) |
 | [**From your machine**](#deploy-from-your-machine) (`deploy`) | Install dx and the Vercel CLI | Nothing; you run `dioxus-vercel deploy` (about 20 seconds after the first build) |
 
 Every way ends the same: the built app goes to Vercel in its prebuilt format ([Build Output API v3](https://vercel.com/docs/build-output-api)) and is served from Vercel's CDN.
+
+## How fast is it?
+
+These times were measured in November 2026 on two small two-page apps: this repo's [example app](examples/hello) and the [init demo](https://github.com/nylla8444/dioxus-vercel-init-demo). A bigger app takes longer to compile, but the differences between the approaches stay.
+
+**Builds on Vercel's own machines** (a Git repository connected to Vercel):
+
+| Approach | First build | Later builds |
+|---|---|---|
+| Without dioxus-vercel, using DioxusLabs' prebuilt `dx` | ❌ Fails: `dx` needs glibc 2.35 or newer, and Vercel's machines have 2.34 | ❌ Fails |
+| Without dioxus-vercel, compiling `dx` during the build | ❌ Still compiling `dx` after 17 minutes, when we stopped it | — |
+| **With dioxus-vercel (`init`)** | **2 min 56 s** | **57 s to 1 min**, because Vercel restores the cache |
+
+In a later build, about 22 seconds go to installing dioxus-vercel, 13 to setting up Rust and 20 to compiling your own code. `dx` and your dependencies come from the cache.
+
+**Getting `dx`**, which every build needs:
+
+| How | Time |
+|---|---|
+| Compile it on Vercel's build machine (2 CPUs) | Over 17 minutes (stopped) |
+| Compile it on GitHub Actions | 6 to 13 minutes, across 15 Dioxus versions |
+| Compile it on a Windows laptop | 8 minutes |
+| **Download dioxus-vercel's build for Vercel** | **1 second** |
+
+**dioxus-vercel's other routes:**
+
+| Way | First run | Later runs |
+|---|---|---|
+| GitHub Actions (`init-ci`) | 2 min 6 s | 62 to 75 s, with the Rust cache |
+| From your machine (`deploy`) | About 6 minutes, compiling everything once | About 20 seconds |
+
+For comparison, another Rust and WebAssembly project [reported](https://github.com/Jlore-Studios/JackiOh/issues/997) Vercel builds of about 4 minutes, and 12 after adding a C++ module, because Vercel kept none of its Rust build output. We haven't timed other setups, such as Vercel's container runtime or a hand-written GitHub Actions workflow.
 
 ## Status
 
