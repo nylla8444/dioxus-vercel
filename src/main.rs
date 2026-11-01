@@ -228,8 +228,8 @@ fn init_ci(target: &TargetArgs, project_flag: Option<&str>, force: bool) -> Resu
 
     println!(
         "\nThe workflow deploys to the Vercel project `{name}`. To finish:\n\
-         1. Create a Vercel token: run `vercel tokens create github-actions`, or use \
-         Account Settings > Tokens on vercel.com.\n\
+         1. Create a token at https://vercel.com/account/tokens. For Scope, pick the \
+         team that owns the project and All Projects, and set an expiration.\n\
          2. On GitHub, add it as a repository secret named VERCEL_TOKEN \
          (Settings > Secrets and variables > Actions).\n\
          3. Commit and push the workflow, vercel.json and Cargo.toml."

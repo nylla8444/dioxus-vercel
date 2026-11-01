@@ -89,7 +89,7 @@ The workflow builds on GitHub's machines, keeps Rust's build output between runs
 
 To finish:
 
-1. Create a Vercel token, with `vercel tokens create github-actions` or under Account Settings > Tokens on vercel.com.
+1. Create a token at [vercel.com/account/tokens](https://vercel.com/account/tokens). For Scope, pick the team that owns the project and **All Projects**, so the workflow can create the project on its first run. Set an expiration, so a leaked token stops working on its own. (`vercel tokens create` doesn't work here: a session from `vercel login` can't create tokens.)
 2. On GitHub, add it as a repository secret named `VERCEL_TOKEN` (Settings > Secrets and variables > Actions).
 3. Commit and push the workflow, `vercel.json` and `Cargo.toml`.
 
