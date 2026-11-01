@@ -1,10 +1,14 @@
 //! Calls to the Vercel CLI.
+//!
+//! The CLI changes its output when it detects an AI coding agent (through
+//! variables such as `AI_AGENT`): it prints JSON reports instead of text.
+//! People and CI see the text form, so both are handled here.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::Result;
-use serde::Deserialize;
+use serde_json::Value;
 
 use crate::tools;
 
@@ -25,7 +29,7 @@ pub struct Deployment {
     pub url: Option<String>,
 }
 
-/// What `vercel project inspect --json` says about a project.
+/// What `vercel project inspect` says about a project.
 #[derive(Debug, PartialEq)]
 enum ProjectState {
     Missing,
@@ -33,6 +37,8 @@ enum ProjectState {
         name: String,
         framework: Option<String>,
     },
+    /// The CLI couldn't say, with its message.
+    Unknown(String),
 }
 
 impl Vercel {
@@ -75,7 +81,7 @@ impl Vercel {
         };
 
         match (before, project) {
-            (Some(ProjectState::Missing), Some(project)) => {
+            (ProjectState::Missing, Some(project)) => {
                 created = true;
                 tools::run(
                     &self.program,
@@ -94,10 +100,10 @@ impl Vercel {
                 );
             }
             (
-                Some(ProjectState::Exists {
+                ProjectState::Exists {
                     name,
                     framework: Some(framework),
-                }),
+                },
                 _,
             ) if RUST_PRESETS.contains(&framework.as_str()) => {
                 eprintln!(
@@ -106,54 +112,75 @@ impl Vercel {
                      `vercel project update {name} --framework other`."
                 );
             }
+            // Without a project name, an unlinked folder is expected to be unknown.
+            (ProjectState::Unknown(reason), Some(project)) => {
+                eprintln!(
+                    "note: couldn't check the Framework Preset of `{project}` ({reason}). \
+                     If Vercel set it to \"rust\", switch it off with \
+                     `vercel project update {project} --framework other`."
+                );
+            }
             _ => {}
         }
         Ok(Deployment { created, url })
     }
 
-    /// Returns `None` when Vercel can't say, for example when no project
-    /// was named and the folder isn't linked.
-    fn inspect(&self, dir: &Path, project: Option<&str>) -> Option<ProjectState> {
+    fn inspect(&self, dir: &Path, project: Option<&str>) -> ProjectState {
         let mut command = Command::new(&self.program);
         command.args(["project", "inspect"]);
         if let Some(project) = project {
             command.arg(project);
         }
-        let output = command.arg("--json").current_dir(dir).output().ok()?;
-        parse_inspect(&output.stdout)
-    }
-}
-
-fn parse_inspect(stdout: &[u8]) -> Option<ProjectState> {
-    #[derive(Deserialize)]
-    struct Inspect {
-        name: Option<String>,
-        framework: Option<String>,
-        reason: Option<String>,
-    }
-
-    let inspect: Inspect = serde_json::from_slice(stdout).ok()?;
-    if inspect.reason.as_deref() == Some("project_not_found") {
-        return Some(ProjectState::Missing);
-    }
-    Some(ProjectState::Exists {
-        name: inspect.name?,
-        framework: inspect.framework,
-    })
-}
-
-/// Finds the deployment URL in `vercel deploy` stdout. When stdout isn't a
-/// terminal, the CLI prints a JSON report there; older versions print just
-/// the URL.
-fn parse_deploy_url(stdout: &str) -> Option<String> {
-    if let Some(start) = stdout.find('{') {
-        let mut values =
-            serde_json::Deserializer::from_str(&stdout[start..]).into_iter::<serde_json::Value>();
-        if let Some(Ok(report)) = values.next() {
-            if let Some(url) = report["deployment"]["url"].as_str() {
-                return Some(url.to_owned());
-            }
+        match command.arg("--json").current_dir(dir).output() {
+            Ok(output) => parse_inspect(output.status.success(), &output.stdout, &output.stderr),
+            Err(err) => ProjectState::Unknown(err.to_string()),
         }
+    }
+}
+
+fn parse_inspect(success: bool, stdout: &[u8], stderr: &[u8]) -> ProjectState {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+
+    if let Some(report) = first_json(&stdout) {
+        if report["reason"] == "project_not_found" {
+            return ProjectState::Missing;
+        }
+        if let (true, Some(name)) = (success, report["name"].as_str()) {
+            return ProjectState::Exists {
+                name: name.to_owned(),
+                framework: report["framework"].as_str().map(str::to_owned),
+            };
+        }
+    }
+    // The text form of the same error.
+    if !success && stderr.contains("There is no project for") {
+        return ProjectState::Missing;
+    }
+
+    // Skip notices like `<claude-code-hint ... />` and prefer an `Error:` line.
+    let lines: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('<'))
+        .collect();
+    let reason = lines
+        .iter()
+        .find(|line| line.starts_with("Error"))
+        .or(lines.first())
+        .copied()
+        .unwrap_or("no output");
+    ProjectState::Unknown(reason.to_owned())
+}
+
+/// Finds the deployment URL in `vercel deploy` stdout: a JSON report for
+/// agents, otherwise just the URL.
+fn parse_deploy_url(stdout: &str) -> Option<String> {
+    if let Some(url) = first_json(stdout)
+        .and_then(|report| report["deployment"]["url"].as_str().map(str::to_owned))
+    {
+        return Some(url);
     }
     stdout
         .lines()
@@ -162,13 +189,22 @@ fn parse_deploy_url(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The first JSON value in `text`, ignoring anything printed before it.
+fn first_json(text: &str) -> Option<Value> {
+    let start = text.find('{')?;
+    serde_json::Deserializer::from_str(&text[start..])
+        .into_iter::<Value>()
+        .next()?
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ProjectState, parse_deploy_url, parse_inspect};
 
     #[test]
-    fn deploy_url_from_the_json_report() {
-        // Trimmed from real `vercel deploy --prebuilt` stdout (CLI 65.7).
+    fn deploy_url_from_the_agent_json_report() {
+        // Trimmed from real `vercel deploy --prebuilt` stdout under an AI agent (CLI 65.7).
         let stdout = r#"{
   "status": "ok",
   "deployment": {
@@ -185,7 +221,9 @@ mod tests {
 
     #[test]
     fn deploy_url_from_plain_output() {
-        let stdout = "Some log line\nhttps://my-site-abc123-team.vercel.app\n";
+        // Outside an agent (CLI 65.9 in GitHub Actions), stdout is only the
+        // URL, without a trailing newline.
+        let stdout = "https://my-site-abc123-team.vercel.app";
         assert_eq!(
             parse_deploy_url(stdout).as_deref(),
             Some("https://my-site-abc123-team.vercel.app")
@@ -195,15 +233,16 @@ mod tests {
 
     #[test]
     fn existing_project_with_a_preset() {
-        // Trimmed from real `vercel project inspect --json` output (CLI 65.7).
+        // Trimmed from real `vercel project inspect --json` output; this form
+        // is the same with or without an agent.
         let json =
-            br#"{ "id": "prj_x", "name": "my-site", "framework": "rust", "buildCommand": null }"#;
+            br#"{ "id": "prj_x", "name": "my-site", "owner": { "slug": "team" }, "framework": "rust" }"#;
         assert_eq!(
-            parse_inspect(json),
-            Some(ProjectState::Exists {
+            parse_inspect(true, json, b""),
+            ProjectState::Exists {
                 name: "my-site".into(),
                 framework: Some("rust".into())
-            })
+            }
         );
     }
 
@@ -211,26 +250,46 @@ mod tests {
     fn existing_project_without_a_preset() {
         let json = br#"{ "id": "prj_x", "name": "my-site", "framework": null }"#;
         assert_eq!(
-            parse_inspect(json),
-            Some(ProjectState::Exists {
+            parse_inspect(true, json, b""),
+            ProjectState::Exists {
                 name: "my-site".into(),
                 framework: None
-            })
+            }
         );
     }
 
     #[test]
-    fn missing_project() {
-        let json = br#"{ "status": "error", "reason": "project_not_found", "message": "There is no project" }"#;
-        assert_eq!(parse_inspect(json), Some(ProjectState::Missing));
+    fn missing_project_as_agent_json() {
+        let stdout = br#"{ "status": "error", "reason": "project_not_found", "message": "There is no project" }"#;
+        let stderr = b"<claude-code-hint v=\"1\" type=\"plugin\" />\n";
+        assert_eq!(parse_inspect(false, stdout, stderr), ProjectState::Missing);
     }
 
     #[test]
-    fn other_errors_and_garbage_are_unknown() {
+    fn missing_project_as_text() {
+        // Real output outside an agent (CLI 65.7 and 65.9): empty stdout, exit code 1.
+        let stderr = b"Error: There is no project for \"my-site\"\n";
+        assert_eq!(parse_inspect(false, b"", stderr), ProjectState::Missing);
+    }
+
+    #[test]
+    fn other_errors_are_unknown_with_the_cli_message() {
+        let stderr = b"<claude-code-hint v=\"1\" />\nVercel CLI 65.9.0\nError: The specified token is not valid.\n";
         assert_eq!(
-            parse_inspect(br#"{ "status": "error", "reason": "not_linked" }"#),
-            None
+            parse_inspect(false, b"", stderr),
+            ProjectState::Unknown("Error: The specified token is not valid.".into())
         );
-        assert_eq!(parse_inspect(b"Error: something went wrong"), None);
+        assert_eq!(
+            parse_inspect(
+                false,
+                br#"{ "status": "error", "reason": "not_linked" }"#,
+                b""
+            ),
+            ProjectState::Unknown(r#"{ "status": "error", "reason": "not_linked" }"#.into())
+        );
+        assert_eq!(
+            parse_inspect(false, b"", b""),
+            ProjectState::Unknown("no output".into())
+        );
     }
 }

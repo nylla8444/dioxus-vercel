@@ -63,6 +63,11 @@ pub fn run_capturing(program: &Path, args: &[&str], dir: &Path) -> Result<String
         .output()
         .with_context(|| format!("failed to start `{name}`"))?;
     io::stdout().write_all(&output.stdout)?;
+    // The Vercel CLI prints a bare URL without a newline; end the line so
+    // the next message doesn't run into it.
+    if !output.stdout.is_empty() && !output.stdout.ends_with(b"\n") {
+        println!();
+    }
     if !output.status.success() {
         bail!("`{name} {}` failed ({})", args.join(" "), output.status);
     }
