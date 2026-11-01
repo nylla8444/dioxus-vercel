@@ -90,7 +90,11 @@ struct BuildArgs {
 }
 
 fn main() -> Result<()> {
-    match Cli::parse().command {
+    let cli = Cli::parse();
+    if vercel_build::running_on_vercel() {
+        vercel_build::use_cache_folder()?;
+    }
+    match cli.command {
         Command::Build(args) => {
             let project = load(&args.target)?;
             build(&args, &project)?;

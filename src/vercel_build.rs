@@ -22,6 +22,28 @@ pub fn running_on_vercel() -> bool {
     cfg!(target_os = "linux") && std::env::var_os("VERCEL").is_some_and(|value| value == "1")
 }
 
+/// Points Cargo's build output at `node_modules/.cache`, a folder Vercel
+/// keeps between builds, so later builds can reuse compiled dependencies.
+/// Vercel runs the build command from the project's Root Directory, which
+/// is where it looks for `node_modules`. Call this before starting threads.
+pub fn use_cache_folder() -> Result<()> {
+    if std::env::var_os("CARGO_TARGET_DIR").is_some() {
+        return Ok(());
+    }
+    let dir = std::env::current_dir()?
+        .join("node_modules")
+        .join(".cache")
+        .join("dioxus-vercel")
+        .join("target");
+    // SAFETY: main calls this first, while the program has only one thread.
+    unsafe { std::env::set_var("CARGO_TARGET_DIR", &dir) };
+    println!(
+        "Keeping Rust's build output in {} so Vercel can cache it",
+        dir.display()
+    );
+    Ok(())
+}
+
 /// Gets Rust ready to build WebAssembly and returns a dx that runs here.
 pub fn prepare(project: &Project) -> Result<PathBuf> {
     prepare_rust(&project.root)?;
