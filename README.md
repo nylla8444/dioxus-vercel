@@ -27,7 +27,7 @@ cargo install dioxus-vercel --locked
 Or install the latest code from GitHub:
 
 ```sh
-cargo install --git https://github.com/nylla8444/dioxus-vercel --locked
+cargo install --git https://github.com/nylla8444/dioxus-vercel --locked dioxus-vercel
 ```
 
 ## Let Vercel build it
