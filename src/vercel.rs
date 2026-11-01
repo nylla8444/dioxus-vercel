@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 use crate::tools;
@@ -125,6 +125,36 @@ impl Vercel {
         Ok(Deployment { created, url })
     }
 
+    /// Creates `project` if needed, sets it up for builds driven by
+    /// vercel.json, and connects it to the Git repository at `repo` (its
+    /// `origin` remote), so Vercel builds every push. `root_directory` is the
+    /// app's folder relative to the repository. Returns whether the project
+    /// was created.
+    pub fn connect_git(&self, repo: &Path, project: &str, root_directory: &str) -> Result<bool> {
+        let created = match self.inspect(repo, Some(project)) {
+            ProjectState::Missing => {
+                tools::run(&self.program, &["project", "create", project], repo)?;
+                true
+            }
+            ProjectState::Exists { .. } => false,
+            ProjectState::Unknown(reason) => {
+                bail!("couldn't look up the Vercel project `{project}`: {reason}")
+            }
+        };
+        tools::run(&self.program, &update_args(project, root_directory), repo)?;
+        tools::run(
+            &self.program,
+            &["git", "connect", "--project", project, "--yes"],
+            repo,
+        )
+        .context(
+            "Vercel couldn't connect the repository. If it says it has no access, give \
+             Vercel's GitHub app access to the repository at https://github.com/apps/vercel \
+             and run this again.",
+        )?;
+        Ok(created)
+    }
+
     fn inspect(&self, dir: &Path, project: Option<&str>) -> ProjectState {
         let mut command = Command::new(&self.program);
         command.args(["project", "inspect"]);
@@ -136,6 +166,18 @@ impl Vercel {
             Err(err) => ProjectState::Unknown(err.to_string()),
         }
     }
+}
+
+/// `vercel project update` arguments for a project that vercel.json builds:
+/// the "Other" preset, and the app's folder as Root Directory when the app
+/// isn't at the top of the repository.
+fn update_args<'a>(project: &'a str, root_directory: &'a str) -> Vec<&'a str> {
+    let mut args = vec!["project", "update", project, "--framework", "other"];
+    if root_directory != "." {
+        args.extend(["--root-directory", root_directory]);
+    }
+    args.push("--yes");
+    args
 }
 
 fn parse_inspect(success: bool, stdout: &[u8], stderr: &[u8]) -> ProjectState {
@@ -200,7 +242,35 @@ fn first_json(text: &str) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProjectState, parse_deploy_url, parse_inspect};
+    use super::{ProjectState, parse_deploy_url, parse_inspect, update_args};
+
+    #[test]
+    fn update_sets_the_root_directory_only_for_subfolders() {
+        assert_eq!(
+            update_args("my-site", "."),
+            [
+                "project",
+                "update",
+                "my-site",
+                "--framework",
+                "other",
+                "--yes"
+            ]
+        );
+        assert_eq!(
+            update_args("my-site", "apps/web"),
+            [
+                "project",
+                "update",
+                "my-site",
+                "--framework",
+                "other",
+                "--root-directory",
+                "apps/web",
+                "--yes"
+            ]
+        );
+    }
 
     #[test]
     fn deploy_url_from_the_agent_json_report() {

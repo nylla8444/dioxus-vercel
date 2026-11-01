@@ -47,6 +47,11 @@ enum Command {
     Init {
         #[command(flatten)]
         target: TargetArgs,
+        /// Also create this Vercel project if needed and connect it to the
+        /// repository, instead of importing it on vercel.com. Needs the
+        /// Vercel CLI, logged in.
+        #[arg(long)]
+        project: Option<String>,
         /// Replace build settings someone else put in vercel.json
         #[arg(long)]
         force: bool,
@@ -143,7 +148,11 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Command::Init { target, force } => init(&target, force)?,
+        Command::Init {
+            target,
+            project,
+            force,
+        } => init(&target, project.as_deref(), force)?,
         Command::InitCi {
             target,
             project,
@@ -192,8 +201,38 @@ fn build(args: &BuildArgs, project: &Project) -> Result<()> {
     Ok(())
 }
 
-fn init(target: &TargetArgs, force: bool) -> Result<()> {
+fn init(target: &TargetArgs, project_flag: Option<&str>, force: bool) -> Result<()> {
     let project = load(target)?;
+    let repo = ci::repo_root(&project.root);
+
+    // With --project, check everything connecting needs before writing files.
+    let connect = match project_flag {
+        Some(name) => {
+            let vercel = Vercel::find()?;
+            let repo = repo.as_deref().with_context(|| {
+                format!(
+                    "{} isn't inside a git repository. Create one, push it to GitHub, \
+                     and run init --project again.",
+                    project.root.display()
+                )
+            })?;
+            let git = tools::find("git", "Install Git first.")?;
+            let has_origin = std::process::Command::new(git)
+                .args(["remote", "get-url", "origin"])
+                .current_dir(repo)
+                .output()
+                .is_ok_and(|output| output.status.success());
+            if !has_origin {
+                bail!(
+                    "this git repository has no `origin` remote. Push it to GitHub first, \
+                     then run init --project again."
+                );
+            }
+            Some((vercel, name))
+        }
+        None => None,
+    };
+
     let path = project.root.join("vercel.json");
     let existing = path
         .exists()
@@ -213,7 +252,6 @@ fn init(target: &TargetArgs, force: bool) -> Result<()> {
     }
 
     // Vercel reads vercel.json from the project's Root Directory setting.
-    let repo = ci::repo_root(&project.root);
     let root_directory = match &repo {
         Some(repo) => ci::workdir(repo, &project.root)?,
         None => ".".to_owned(),
@@ -228,6 +266,21 @@ fn init(target: &TargetArgs, force: bool) -> Result<()> {
             );
         }
     }
+    if let (Some((vercel, name)), Some(repo)) = (connect, &repo) {
+        let created = vercel.connect_git(repo, name, &root_directory)?;
+        if project.vercel_project.as_deref() != Some(name) {
+            config::save_project(&project.manifest_path, name)?;
+        }
+        println!(
+            "\n{} Vercel project `{name}` and connected it to this repository.\n\
+             Commit and push vercel.json (and Cargo.toml, which now names the project). \
+             Vercel builds that push and every one after it, and gives every pull request \
+             a preview.",
+            if created { "Created" } else { "Set up" }
+        );
+        return Ok(());
+    }
+
     let root_hint = if root_directory == "." {
         String::new()
     } else {
@@ -238,7 +291,9 @@ fn init(target: &TargetArgs, force: bool) -> Result<()> {
          1. Commit and push vercel.json.\n\
          2. On vercel.com, choose Add New > Project, import this repository{root_hint}, \
          and click Deploy.\n\
-         Vercel then builds and deploys every push itself, and gives every pull request a preview."
+         Vercel then builds and deploys every push itself, and gives every pull request a preview.\n\
+         Or, with the Vercel CLI logged in, run `dioxus-vercel init --project <name>` to do \
+         step 2 from here."
     );
     Ok(())
 }

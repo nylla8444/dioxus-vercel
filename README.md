@@ -43,12 +43,20 @@ git push
 
 Then on vercel.com, choose **Add New > Project**, import the repository and click **Deploy**. If the app is in a subfolder of the repository, set **Root Directory** to that folder. From then on, Vercel builds and deploys every push and gives every pull request a preview. No token or secret is needed.
 
+If you have the Vercel CLI and are logged in, `init` can do the vercel.com part too:
+
+```sh
+dioxus-vercel init --project my-site
+```
+
+That also creates the Vercel project if needed, sets its Root Directory, and connects it to your repository's `origin` remote, so only the commit and push are left. Vercel's GitHub app needs access to the repository; if it doesn't have it yet, give it access at [github.com/apps/vercel](https://github.com/apps/vercel).
+
 `init` writes this `vercel.json`, or adds it to yours and keeps your other settings. You can also copy it in by hand, without installing anything:
 
 ```json
 {
   "framework": null,
-  "installCommand": "cargo install dioxus-vercel --version 0.3.1 --locked",
+  "installCommand": "cargo install dioxus-vercel --version 0.3.2 --locked",
   "buildCommand": "dioxus-vercel build"
 }
 ```
@@ -66,6 +74,7 @@ This repo builds that dx automatically for every Dioxus version from 0.7.0 on, p
 |---|---|
 | `--path <dir>` | Project folder (default: the current folder) |
 | `-p, --package <name>` | Which package to build in a workspace with several |
+| `--project <name>` | Also create the Vercel project and connect it to the repository (needs the Vercel CLI) |
 | `--force` | Replace build settings someone else put in `vercel.json` |
 
 ## Deploy from GitHub Actions
