@@ -1,0 +1,74 @@
+# Builds the Dioxus CLI (dx) on Amazon Linux 2023, the system Vercel's build
+# machines run. DioxusLabs' Linux builds of dx need glibc 2.35 or newer, and
+# Vercel's machines have 2.34, so their dx can't run there.
+#
+# Push a tag named dx-<version>, such as dx-0.7.10, to build that version of
+# dx and attach it to a GitHub release with the same name.
+name: Build dx for Vercel
+
+on:
+  push:
+    tags: ["dx-*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: amazonlinux:2023
+    steps:
+      - name: Install build tools
+        run: dnf install -y gcc gcc-c++ make perl openssl-devel pkgconf-pkg-config binutils tar gzip findutils
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+
+      - name: Build dx
+        run: |
+          version="${GITHUB_REF_NAME#dx-}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          "$HOME/.cargo/bin/cargo" install dioxus-cli --version "$version" --locked --root out
+
+      - name: Check that it runs and which glibc it needs
+        run: |
+          out/bin/dx --version
+          ldd --version | head -1
+          echo "newest glibc symbol dx uses: $(objdump -T out/bin/dx | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+
+      # dx is MIT OR Apache-2.0, so its license files ship with the binary.
+      - name: Package
+        run: |
+          name="dx-$VERSION-x86_64-amazonlinux2023"
+          mkdir "$name"
+          cp out/bin/dx "$name/"
+          for license in LICENSE-MIT LICENSE-APACHE; do
+            curl -fsSL -o "$name/$license" "https://raw.githubusercontent.com/DioxusLabs/dioxus/v$VERSION/$license"
+          done
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dx
+          path: dx-*.tar.gz*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dx
+
+      # --latest=false keeps the tool's own release as the repo's latest.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#dx-}"
+          gh release create "$GITHUB_REF_NAME" dx-*.tar.gz* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "dx $version for Vercel builds" \
+            --latest=false \
+            --notes "The Dioxus CLI (dx) $version, built on Amazon Linux 2023 so it runs on Vercel's build machines (glibc 2.34). It's an unmodified build of dioxus-cli $version from crates.io, licensed MIT OR Apache-2.0 by DioxusLabs; the license files are in the archive."
