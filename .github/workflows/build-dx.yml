@@ -1,22 +1,67 @@
 # Builds the Dioxus CLI (dx) on Amazon Linux 2023, the system Vercel's build
 # machines run. DioxusLabs' Linux builds of dx need glibc 2.35 or newer, and
-# Vercel's machines have 2.34, so their dx can't run there.
+# Vercel's machines have 2.34, so their dx can't run there. dioxus-vercel
+# downloads these builds when it runs on Vercel.
 #
-# Push a tag named dx-<version>, such as dx-0.7.10, to build that version of
-# dx and attach it to a GitHub release with the same name.
+# Once a day, and whenever this file changes, it builds every dioxus-cli
+# version from 0.7.0 on that has no dx-<version> release yet: stable versions,
+# plus pre-releases newer than the newest stable one. Pushing a dx-<version>
+# tag builds just that version.
 name: Build dx for Vercel
 
 on:
+  schedule:
+    - cron: "23 4 * * *"
   push:
+    branches: [main]
+    paths: [".github/workflows/build-dx.yml"]
     tags: ["dx-*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.missing.outputs.versions }}
+    steps:
+      - name: Find versions without a build
+        id: missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/dx-* ]]; then
+            echo "versions=[\"${GITHUB_REF_NAME#dx-}\"]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          existing=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '[.[].tagName]')
+          versions=$(curl -fsSL -A "dioxus-vercel build-dx (https://github.com/$GITHUB_REPOSITORY)" \
+            "https://crates.io/api/v1/crates/dioxus-cli/versions?per_page=100&sort=semver" |
+            jq -c --argjson existing "$existing" '
+              def minor: split(".")[0:2] | map(tonumber? // 0);
+              [.versions[] | select(.yanked | not) | .num] as $all
+              | ($all | map(select(contains("-") | not) | minor) | max) as $newest
+              | $all | map(select(
+                  (minor >= [0, 7])
+                  and ((contains("-") | not) or (minor > $newest))
+                  and (("dx-" + .) as $tag | $existing | any(. == $tag) | not)
+                ))')
+          echo "Versions to build: $versions"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.versions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
     runs-on: ubuntu-latest
     container: amazonlinux:2023
+    env:
+      VERSION: ${{ matrix.version }}
     steps:
       - name: Install build tools
         run: dnf install -y gcc gcc-c++ make perl openssl-devel pkgconf-pkg-config binutils tar gzip findutils
@@ -25,10 +70,7 @@ jobs:
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 
       - name: Build dx
-        run: |
-          version="${GITHUB_REF_NAME#dx-}"
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-          "$HOME/.cargo/bin/cargo" install dioxus-cli --version "$version" --locked --root out
+        run: '"$HOME/.cargo/bin/cargo" install dioxus-cli --version "$VERSION" --locked --root out'
 
       - name: Check that it runs and which glibc it needs
         run: |
@@ -50,25 +92,39 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: dx
+          name: dx-${{ matrix.version }}
           path: dx-*.tar.gz*
 
   release:
-    needs: build
+    needs: [plan, build]
+    # Runs for the versions that built, even if others failed.
+    if: ${{ !cancelled() && needs.plan.outputs.versions != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.plan.outputs.versions) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
+        id: download
+        # Missing when this version's build failed.
+        continue-on-error: true
         with:
-          name: dx
+          name: dx-${{ matrix.version }}
 
       # --latest=false keeps the tool's own release as the repo's latest.
       - name: Publish the release
+        if: steps.download.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
         run: |
-          version="${GITHUB_REF_NAME#dx-}"
-          gh release create "$GITHUB_REF_NAME" dx-*.tar.gz* \
+          flags=(--latest=false)
+          if [[ "$VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "dx-$VERSION" dx-*.tar.gz* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "dx $version for Vercel builds" \
-            --latest=false \
-            --notes "The Dioxus CLI (dx) $version, built on Amazon Linux 2023 so it runs on Vercel's build machines (glibc 2.34). It's an unmodified build of dioxus-cli $version from crates.io, licensed MIT OR Apache-2.0 by DioxusLabs; the license files are in the archive."
+            --title "dx $VERSION for Vercel builds" \
+            "${flags[@]}" \
+            --notes "The Dioxus CLI (dx) $VERSION, built on Amazon Linux 2023 so it runs on Vercel's build machines (glibc 2.34). It's an unmodified build of dioxus-cli $VERSION from crates.io, licensed MIT OR Apache-2.0 by DioxusLabs; the license files are in the archive."
