@@ -6,7 +6,7 @@ It runs `dx bundle --web --release` on your machine, writes the result in Vercel
 
 ## Status
 
-Version 0.1 handles **client-side Dioxus web apps**. It has been tested with Dioxus 0.7.10, dx 0.7.10 and Vercel CLI 65.7 on Windows 11.
+dioxus-vercel handles **client-side Dioxus web apps**, deployed from your machine or from GitHub Actions. It has been tested with Dioxus 0.7.10, dx 0.7.10 and Vercel CLI 65.7 on Windows 11.
 
 Not supported yet:
 - static site generation (`dx bundle --ssg`)
@@ -72,6 +72,38 @@ The project is picked from `--project`, then `Cargo.toml`, then a folder linked 
 
 When dioxus-vercel creates a project, it sets the project's Framework Preset to "Other". Otherwise Vercel would pick its "Rust" preset from `Cargo.toml` and `src/main.rs`, and a build from a connected Git repo would try to run your app as a server function. For existing projects with a Rust preset, it prints a warning with the command that fixes it.
 
+## Deploy from GitHub Actions
+
+Vercel can't build Dioxus apps, so connecting your repo to Vercel won't give you automatic deploys. `init-ci` sets them up with GitHub Actions instead:
+
+```sh
+dioxus-vercel init-ci --project my-site
+```
+
+It writes two files and saves the project name to `Cargo.toml`:
+
+- `.github/workflows/dioxus-vercel.yml`, at the root of your git repository. A push to `main` deploys to production. A pull request deploys a preview and gets a comment with its link.
+- `vercel.json` next to your `Cargo.toml`, with `"git": { "deploymentEnabled": false }`, so Vercel doesn't also try to build every push. An existing `vercel.json` is left alone.
+
+The workflow builds on GitHub's machines, keeps Rust's build output between runs with [rust-cache](https://github.com/Swatinem/rust-cache), and installs the prebuilt `dx` that matches your `dioxus` version.
+
+To finish:
+
+1. Create a Vercel token, with `vercel tokens create github-actions` or under Account Settings > Tokens on vercel.com.
+2. On GitHub, add it as a repository secret named `VERCEL_TOKEN` (Settings > Secrets and variables > Actions).
+3. Commit and push the workflow, `vercel.json` and `Cargo.toml`.
+
+| `init-ci` option | What it does |
+|---|---|
+| `--path <dir>` | Project folder (default: the current folder) |
+| `-p, --package <name>` | Which package to deploy in a workspace with several |
+| `--project <name>` | Vercel project to deploy to; saved to `Cargo.toml` |
+| `--force` | Replace an existing workflow file |
+
+Pull requests from forks don't get repository secrets, so the workflow skips them.
+
+This repo deploys its own [example app](examples/hello) this way.
+
 ## What it writes
 
 `.vercel/output/static/` holds dx's output, and `.vercel/output/config.json` sets three routes:
@@ -86,7 +118,7 @@ On a real deploy, Vercel also serves the `.wasm` file with the right content typ
 
 - **A project's first deploy goes to production.** That's how Vercel works. Later deploys are previews unless you pass `--prod`.
 - **Previews need a Vercel login to view**, because Deployment Protection is on by default.
-- **Connecting the Git repo to Vercel won't deploy your app.** Vercel can't build Dioxus apps, so deploy with dioxus-vercel instead.
+- **Connecting the Git repo to Vercel won't deploy your app.** Vercel can't build Dioxus apps. Use `init-ci` for automatic deploys instead.
 - **Unknown paths return status 200**, because they get `index.html` (see routes above).
 - **Building on Windows is fine.** The WebAssembly output is the same on every OS, so no cross-compiling is needed.
 

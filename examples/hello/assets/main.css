@@ -1,0 +1,20 @@
+body {
+    font-family: system-ui, sans-serif;
+    max-width: 40rem;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    background: #fafaf7;
+    color: #1d1d1b;
+}
+
+nav {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+button {
+    font: inherit;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+}

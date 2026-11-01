@@ -1,6 +1,6 @@
 [package]
 name = "dioxus-vercel"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Build a Dioxus web app and deploy it to Vercel as a prebuilt static site"
@@ -9,6 +9,8 @@ repository = "https://github.com/nylla8444/dioxus-vercel"
 readme = "README.md"
 keywords = ["dioxus", "vercel", "wasm", "deploy", "cli"]
 categories = ["command-line-utilities", "wasm", "web-programming"]
+# The demo app and this repo's own workflow aren't part of the tool.
+exclude = ["/examples", "/.github"]
 
 [dependencies]
 anyhow = "1"

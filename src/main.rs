@@ -1,3 +1,4 @@
+mod ci;
 mod config;
 mod output;
 mod project;
@@ -6,7 +7,7 @@ mod vercel;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::project::Project;
@@ -39,16 +40,35 @@ enum Command {
         #[arg(long, requires = "project")]
         save: bool,
     },
+    /// Write a GitHub Actions workflow that deploys every push to main and
+    /// every pull request
+    InitCi {
+        #[command(flatten)]
+        target: TargetArgs,
+        /// Vercel project to deploy to; saved to Cargo.toml for the workflow.
+        /// Defaults to `project` in [package.metadata.dioxus-vercel].
+        #[arg(long)]
+        project: Option<String>,
+        /// Replace an existing workflow file
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Args)]
-struct BuildArgs {
+struct TargetArgs {
     /// Path to the Dioxus project
     #[arg(long, default_value = ".")]
     path: PathBuf,
     /// Package to build, when the workspace has more than one
     #[arg(long, short)]
     package: Option<String>,
+}
+
+#[derive(Args)]
+struct BuildArgs {
+    #[command(flatten)]
+    target: TargetArgs,
     /// Reuse the existing dx output instead of running `dx bundle`
     #[arg(long)]
     skip_bundle: bool,
@@ -61,48 +81,71 @@ struct BuildArgs {
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Build(args) => {
-            build(&args)?;
+            let project = load(&args.target)?;
+            build(&args, &project)?;
         }
         Command::Deploy {
             build: args,
             prod,
-            project,
+            project: project_flag,
             save,
         } => {
             // Fail before the slow bundle step if the Vercel CLI is missing.
             let vercel = Vercel::find()?;
-            let built = build(&args)?;
-            let target = project.as_deref().or(built.vercel_project.as_deref());
-            let created = vercel.deploy(&built.root, prod, target)?;
+            let project = load(&args.target)?;
+            let target = project_flag
+                .as_deref()
+                .or(project.vercel_project.as_deref());
+            if target.is_none() && ci::running_in_ci() {
+                bail!(
+                    "no Vercel project set. Without one, Vercel asks which project to use, \
+                     which can't work in CI. Pass --project or set `project` in \
+                     [package.metadata.dioxus-vercel] in Cargo.toml."
+                );
+            }
 
-            if let Some(project) = &project {
+            build(&args, &project)?;
+            let deployment = vercel.deploy(&project.root, prod, target)?;
+            if let Some(url) = &deployment.url {
+                println!("Deployed: {url}");
+                ci::report_to_github(url)?;
+            }
+
+            if let Some(name) = &project_flag {
                 if save {
-                    config::save_project(&built.manifest_path, project)?;
+                    config::save_project(&project.manifest_path, name)?;
                     println!(
-                        "Saved project `{project}` to {}",
-                        built.manifest_path.display()
+                        "Saved project `{name}` to {}",
+                        project.manifest_path.display()
                     );
-                } else if built.vercel_project.as_deref() != Some(project.as_str()) {
-                    println!("Tip: add --save to remember `{project}` in Cargo.toml.");
+                } else if project.vercel_project.as_deref() != Some(name.as_str()) {
+                    println!("Tip: add --save to remember `{name}` in Cargo.toml.");
                 }
             }
-            if !prod && !created {
+            if !prod && !deployment.created {
                 println!(
                     "Note: preview deployments need a Vercel login to view unless you turn off Deployment Protection."
                 );
             }
         }
+        Command::InitCi {
+            target,
+            project,
+            force,
+        } => init_ci(&target, project.as_deref(), force)?,
     }
     Ok(())
 }
 
-fn build(args: &BuildArgs) -> Result<Project> {
-    let project = Project::load(&args.path, args.package.as_deref())?;
+fn load(target: &TargetArgs) -> Result<Project> {
+    Project::load(&target.path, target.package.as_deref())
+}
 
+fn build(args: &BuildArgs, project: &Project) -> Result<()> {
     if !args.skip_bundle {
         let dx = tools::find("dx", "Install it with `cargo install dioxus-cli --locked`.")?;
         tools::warn_on_dx_mismatch(&dx, &project.dioxus_version)?;
-        tools::dx_bundle(&dx, &project.root, args.package.as_deref())?;
+        tools::dx_bundle(&dx, &project.root, args.target.package.as_deref())?;
     }
 
     let out_dir = project.root.join(".vercel").join("output");
@@ -119,5 +162,77 @@ fn build(args: &BuildArgs) -> Result<Project> {
         stats.files,
         stats.bytes.div_ceil(1024)
     );
-    Ok(project)
+    Ok(())
+}
+
+fn init_ci(target: &TargetArgs, project_flag: Option<&str>, force: bool) -> Result<()> {
+    let project = load(target)?;
+
+    // The workflow reads the project from Cargo.toml, so it has to be saved there.
+    let name = match (project_flag, project.vercel_project.as_deref()) {
+        (Some(name), saved) => {
+            if saved != Some(name) {
+                config::save_project(&project.manifest_path, name)?;
+                println!(
+                    "Saved project `{name}` to {}",
+                    project.manifest_path.display()
+                );
+            }
+            name
+        }
+        (None, Some(saved)) => saved,
+        (None, None) => bail!(
+            "init-ci needs a Vercel project. Pass --project <name>; it's saved to \
+             Cargo.toml so the workflow can use it."
+        ),
+    };
+
+    let repo = ci::repo_root(&project.root).with_context(|| {
+        format!(
+            "{} isn't inside a git repository. Run `git init` first.",
+            project.root.display()
+        )
+    })?;
+    let vercel_version = Vercel::find()
+        .ok()
+        .and_then(|vercel| vercel.major_version())
+        .unwrap_or_else(|| "latest".to_owned());
+
+    let workflow_path = ci::workflow_path(&repo);
+    let workflow = ci::workflow(&ci::WorkflowOptions {
+        workdir: &ci::workdir(&repo, &project.root)?,
+        package: target.package.as_deref(),
+        dioxus_version: &project.dioxus_version,
+        vercel_version: &vercel_version,
+    });
+    ci::write_new(&workflow_path, &workflow, force)?;
+    println!("Wrote {}", workflow_path.display());
+
+    let vercel_json = project.root.join("vercel.json");
+    if vercel_json.exists() {
+        let existing = std::fs::read_to_string(&vercel_json).unwrap_or_default();
+        if !existing.contains("deploymentEnabled") {
+            println!(
+                "Left {} as it is. Add \"git\": {{ \"deploymentEnabled\": false }} to it, \
+                 or Vercel will also try to build every push itself.",
+                vercel_json.display()
+            );
+        }
+    } else {
+        ci::write_new(&vercel_json, ci::VERCEL_JSON, false)?;
+        println!(
+            "Wrote {} (stops Vercel from building pushes itself)",
+            vercel_json.display()
+        );
+    }
+
+    println!(
+        "\nThe workflow deploys to the Vercel project `{name}`. To finish:\n\
+         1. Create a Vercel token: run `vercel tokens create github-actions`, or use \
+         Account Settings > Tokens on vercel.com.\n\
+         2. On GitHub, add it as a repository secret named VERCEL_TOKEN \
+         (Settings > Secrets and variables > Actions).\n\
+         3. Commit and push the workflow, vercel.json and Cargo.toml."
+    );
+    Ok(())
 }

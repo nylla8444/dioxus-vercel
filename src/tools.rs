@@ -1,5 +1,6 @@
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -48,6 +49,24 @@ pub fn run(program: &Path, args: &[&str], dir: &Path) -> Result<()> {
         bail!("`{name} {}` failed ({status})", args.join(" "));
     }
     Ok(())
+}
+
+/// Like [`run`], but also returns what the program printed to stdout.
+/// Stdin is closed, so only use this for commands that never prompt.
+pub fn run_capturing(program: &Path, args: &[&str], dir: &Path) -> Result<String> {
+    let name = program.file_stem().unwrap_or_default().to_string_lossy();
+    println!("> {name} {}", args.join(" "));
+    let output = Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .stderr(Stdio::inherit())
+        .output()
+        .with_context(|| format!("failed to start `{name}`"))?;
+    io::stdout().write_all(&output.stdout)?;
+    if !output.status.success() {
+        bail!("`{name} {}` failed ({})", args.join(" "), output.status);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Compares versions by major.minor, which is the breaking part for 0.x crates.

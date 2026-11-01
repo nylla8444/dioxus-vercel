@@ -17,6 +17,14 @@ pub struct Vercel {
     program: PathBuf,
 }
 
+pub struct Deployment {
+    /// Whether this deploy created the project. Vercel always makes a new
+    /// project's first deployment the production one, even without `--prod`.
+    pub created: bool,
+    /// The deployment's own URL, when it could be read from Vercel's output.
+    pub url: Option<String>,
+}
+
 /// What `vercel project inspect --json` says about a project.
 #[derive(Debug, PartialEq)]
 enum ProjectState {
@@ -36,13 +44,19 @@ impl Vercel {
         Ok(Self { program })
     }
 
+    /// The CLI's major version, such as `65`.
+    pub fn major_version(&self) -> Option<String> {
+        let output = Command::new(&self.program).arg("--version").output().ok()?;
+        // Prints just the version, e.g. "65.7.0", to stdout.
+        let version = String::from_utf8_lossy(&output.stdout);
+        let major = version.trim().split('.').next()?;
+        (!major.is_empty() && major.bytes().all(|b| b.is_ascii_digit())).then(|| major.to_owned())
+    }
+
     /// Uploads `dir/.vercel/output`. With `project`, deploys to that project
     /// and creates it if needed. Without it, the folder's `vercel link` or
     /// Vercel's own prompt picks the project.
-    ///
-    /// Returns whether the project was created. Vercel always makes a new
-    /// project's first deployment the production one, even without `--prod`.
-    pub fn deploy(&self, dir: &Path, prod: bool, project: Option<&str>) -> Result<bool> {
+    pub fn deploy(&self, dir: &Path, prod: bool, project: Option<&str>) -> Result<Deployment> {
         let before = self.inspect(dir, project);
         let mut created = false;
 
@@ -50,10 +64,15 @@ impl Vercel {
         if prod {
             args.push("--prod");
         }
-        if let Some(project) = project {
+        // With a project named, `--yes` stops every prompt, so stdout can be
+        // captured to find the URL. Without one, Vercel asks questions there.
+        let url = if let Some(project) = project {
             args.extend(["--yes", "--project", project, "--create-if-missing"]);
-        }
-        tools::run(&self.program, &args, dir)?;
+            parse_deploy_url(&tools::run_capturing(&self.program, &args, dir)?)
+        } else {
+            tools::run(&self.program, &args, dir)?;
+            None
+        };
 
         match (before, project) {
             (Some(ProjectState::Missing), Some(project)) => {
@@ -89,7 +108,7 @@ impl Vercel {
             }
             _ => {}
         }
-        Ok(created)
+        Ok(Deployment { created, url })
     }
 
     /// Returns `None` when Vercel can't say, for example when no project
@@ -123,9 +142,56 @@ fn parse_inspect(stdout: &[u8]) -> Option<ProjectState> {
     })
 }
 
+/// Finds the deployment URL in `vercel deploy` stdout. When stdout isn't a
+/// terminal, the CLI prints a JSON report there; older versions print just
+/// the URL.
+fn parse_deploy_url(stdout: &str) -> Option<String> {
+    if let Some(start) = stdout.find('{') {
+        let mut values =
+            serde_json::Deserializer::from_str(&stdout[start..]).into_iter::<serde_json::Value>();
+        if let Some(Ok(report)) = values.next() {
+            if let Some(url) = report["deployment"]["url"].as_str() {
+                return Some(url.to_owned());
+            }
+        }
+    }
+    stdout
+        .lines()
+        .map(str::trim)
+        .rfind(|line| line.starts_with("https://") && !line.contains(char::is_whitespace))
+        .map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ProjectState, parse_inspect};
+    use super::{ProjectState, parse_deploy_url, parse_inspect};
+
+    #[test]
+    fn deploy_url_from_the_json_report() {
+        // Trimmed from real `vercel deploy --prebuilt` stdout (CLI 65.7).
+        let stdout = r#"{
+  "status": "ok",
+  "deployment": {
+    "id": "dpl_x",
+    "url": "https://my-site-abc123-team.vercel.app",
+    "productionUrl": null
+  }
+}"#;
+        assert_eq!(
+            parse_deploy_url(stdout).as_deref(),
+            Some("https://my-site-abc123-team.vercel.app")
+        );
+    }
+
+    #[test]
+    fn deploy_url_from_plain_output() {
+        let stdout = "Some log line\nhttps://my-site-abc123-team.vercel.app\n";
+        assert_eq!(
+            parse_deploy_url(stdout).as_deref(),
+            Some("https://my-site-abc123-team.vercel.app")
+        );
+        assert_eq!(parse_deploy_url("nothing useful here"), None);
+    }
 
     #[test]
     fn existing_project_with_a_preset() {
