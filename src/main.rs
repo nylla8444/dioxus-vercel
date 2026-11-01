@@ -165,6 +165,13 @@ fn build(args: &BuildArgs, project: &Project) -> Result<()> {
             tools::find("dx", "Install it with `cargo install dioxus-cli --locked`.")?
         };
         tools::warn_on_dx_mismatch(&dx, &project.dioxus_version)?;
+        // dx doesn't delete files from earlier bundles, so without this, old
+        // hashed assets would pile up and ship with every deploy.
+        let public = project.dx_public_dir();
+        if public.exists() {
+            std::fs::remove_dir_all(&public)
+                .with_context(|| format!("could not clear {}", public.display()))?;
+        }
         tools::dx_bundle(&dx, &project.root, args.target.package.as_deref())?;
     }
 
