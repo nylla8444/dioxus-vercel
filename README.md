@@ -58,9 +58,9 @@ What happens on Vercel:
 - The install command builds dioxus-vercel with the Rust that Vercel's build machines already have.
 - `dioxus-vercel build` notices that it's running on Vercel and sets up the rest: stable Rust with the WebAssembly target (or the toolchain from your `rust-toolchain` file), and a dx for your `dioxus` version.
 - DioxusLabs' Linux builds of dx need glibc 2.35 or newer, and Vercel's machines have 2.34. So dioxus-vercel downloads a dx built on Amazon Linux 2023 by this repo's [build-dx workflow](.github/workflows/build-dx.yml), and checks its checksum.
-- A build takes about 2 minutes. In our tests, Vercel didn't keep the build cache between deploys, so each build compiles the app from scratch.
+- A build takes about 2 minutes. dioxus-vercel keeps Rust's build output in `node_modules/.cache`, a folder Vercel can keep between builds, so later builds may be faster.
 
-dx builds for Vercel exist for these Dioxus versions: **0.7.10**. For any other version, the build compiles dx itself, which took over 15 minutes in our tests. [Open an issue](https://github.com/nylla8444/dioxus-vercel/issues) to ask for a build.
+This repo builds that dx automatically for every Dioxus version from 0.7.0 on, plus pre-releases newer than the latest stable version, usually within a day of a release ([the dx releases](https://github.com/nylla8444/dioxus-vercel/releases)). If your version has no build yet, the build compiles dx itself, which took over 15 minutes in our tests.
 
 | `init` option | What it does |
 |---|---|
