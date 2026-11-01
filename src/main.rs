@@ -1,9 +1,11 @@
 mod ci;
 mod config;
+mod init;
 mod output;
 mod project;
 mod tools;
 mod vercel;
+mod vercel_build;
 
 use std::path::PathBuf;
 
@@ -39,6 +41,15 @@ enum Command {
         /// Remember --project in Cargo.toml so later deploys don't need it
         #[arg(long, requires = "project")]
         save: bool,
+    },
+    /// Set up vercel.json so Vercel builds and deploys the app itself on
+    /// every push to a connected Git repo
+    Init {
+        #[command(flatten)]
+        target: TargetArgs,
+        /// Replace build settings someone else put in vercel.json
+        #[arg(long)]
+        force: bool,
     },
     /// Write a GitHub Actions workflow that deploys every push to main and
     /// every pull request
@@ -128,6 +139,7 @@ fn main() -> Result<()> {
                 );
             }
         }
+        Command::Init { target, force } => init(&target, force)?,
         Command::InitCi {
             target,
             project,
@@ -143,7 +155,11 @@ fn load(target: &TargetArgs) -> Result<Project> {
 
 fn build(args: &BuildArgs, project: &Project) -> Result<()> {
     if !args.skip_bundle {
-        let dx = tools::find("dx", "Install it with `cargo install dioxus-cli --locked`.")?;
+        let dx = if vercel_build::running_on_vercel() {
+            vercel_build::prepare(project)?
+        } else {
+            tools::find("dx", "Install it with `cargo install dioxus-cli --locked`.")?
+        };
         tools::warn_on_dx_mismatch(&dx, &project.dioxus_version)?;
         tools::dx_bundle(&dx, &project.root, args.target.package.as_deref())?;
     }
@@ -161,6 +177,57 @@ fn build(args: &BuildArgs, project: &Project) -> Result<()> {
         out_dir.display(),
         stats.files,
         stats.bytes.div_ceil(1024)
+    );
+    Ok(())
+}
+
+fn init(target: &TargetArgs, force: bool) -> Result<()> {
+    let project = load(target)?;
+    let path = project.root.join("vercel.json");
+    let existing = path
+        .exists()
+        .then(|| std::fs::read_to_string(&path))
+        .transpose()
+        .with_context(|| format!("could not read {}", path.display()))?;
+    let updated = init::vercel_json(existing.as_deref(), target.package.as_deref(), force)?;
+    if existing.as_deref() == Some(updated.text.as_str()) {
+        println!("{} is already set up.", path.display());
+    } else {
+        std::fs::write(&path, &updated.text)
+            .with_context(|| format!("could not write {}", path.display()))?;
+        println!("Wrote {}", path.display());
+    }
+    for note in &updated.notes {
+        println!("{note}");
+    }
+
+    // Vercel reads vercel.json from the project's Root Directory setting.
+    let repo = ci::repo_root(&project.root);
+    let root_directory = match &repo {
+        Some(repo) => ci::workdir(repo, &project.root)?,
+        None => ".".to_owned(),
+    };
+    if let Some(repo) = &repo {
+        let workflow = ci::workflow_path(repo);
+        if workflow.exists() {
+            println!(
+                "You also have the GitHub Actions workflow from init-ci, so every push would \
+                 deploy twice. Delete {} if you switch to this setup.",
+                workflow.display()
+            );
+        }
+    }
+    let root_hint = if root_directory == "." {
+        String::new()
+    } else {
+        format!(", set Root Directory to `{root_directory}`")
+    };
+    println!(
+        "\nTo finish:\n\
+         1. Commit and push vercel.json.\n\
+         2. On vercel.com, choose Add New > Project, import this repository{root_hint}, \
+         and click Deploy.\n\
+         Vercel then builds and deploys every push itself, and gives every pull request a preview."
     );
     Ok(())
 }

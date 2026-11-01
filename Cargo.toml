@@ -1,6 +1,6 @@
 [package]
 name = "dioxus-vercel"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Build a Dioxus web app and deploy it to Vercel as a prebuilt static site"
@@ -16,7 +16,8 @@ exclude = ["/examples", "/.github"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order keeps the order of settings in a user's vercel.json.
+serde_json = { version = "1", features = ["preserve_order"] }
 toml_edit = "0.25"
 which = "8"
 
